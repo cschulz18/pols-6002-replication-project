@@ -1,0 +1,240 @@
+---
+title: "Descriptive Statistics"
+author: "Christine Schulz"
+date: "April 19, 2022"
+output: 
+  pdf_document:
+    keep_tex: yes
+    
+tables: true
+graphics: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 10, fig.height = 5)
+library(haven)
+library(tidyverse)
+library(fixest)
+```
+
+```{r}
+crime <- read_dta("~/R/replication_project_pols6200/crime.dta")
+county <- read_dta("~/R/replication_project_pols6200/county_dict.dta")
+
+refugees <- read_dta("~/R/replication_project_pols6200/wraps_fips.dta")
+demographics <- read_dta("~/R/replication_project_pols6200/demographics.dta")
+```
+
+```{r}
+#creating dataset with all necessary vars that I can use for other analyses instead
+  #of creating new vars each time
+
+crime1 <- crime %>%  
+  select(state = "state", fips = "fips", year = "year", property_crime = "property_crime", violent_crime = "violent_crime",
+         cleared_property_crime = "cleared_property_crime", cleared_violent_crime = "cleared_violent_crime")
+
+ref_crime1 <- left_join(refugees, crime1)
+
+ref_crime <- left_join(ref_crime1, demographics) 
+
+#create vars
+ref_crime <- ref_crime %>% 
+  mutate(lproperty_crime = log(property_crime + 1),
+         rproperty_crime = (property_crime / pop_total) * 100000,
+         lviolent_crime = log(violent_crime + 1),
+         rviolent_crime = (violent_crime / pop_total) * 100000,
+         lrefugees = log(refugees + 1),
+         rrefugees = (refugees / pop_total) * 100,
+         s_movers = (pop_moved_in_1_yr_ago / pop_total) * 100000,
+         l_movers = log(pop_moved_in_1_yr_ago + 1),
+         s_clr_property = cleared_property_crime / property_crime,
+         s_clr_violent = cleared_violent_crime / violent_crime,
+         log_pop_total = log(pop_total),
+         log_pop_density <- log(pop_density))
+
+```
+
+#Table A1
+```{r, results = 'asis'}
+library(stargazer)
+ref_crime %>% 
+  ungroup %>% 
+  select("Property crime rate" = rproperty_crime,
+         "Violent crime rate" = rviolent_crime,
+         "Log property crime rate" = lproperty_crime,
+         "Log Violent crime rate" = lviolent_crime,
+         "Refugee arrivals" = refugees,
+         "Refugee Arrivals per 100 people" = rrefugees,
+         "Log refugee arrivals" = lrefugees) %>% 
+  as.data.frame %>% 
+  stargazer(median =TRUE, digits=1)
+```
+
+```{r}
+#Figure A2
+
+ref_crime1 <- ref_crime %>% 
+  group_by(state) %>% 
+  summarize(sum = sum(refugees, na.rm=T)) 
+
+ref_crime1 <- ref_crime1 %>% 
+  arrange(desc(sum)) %>% 
+  slice(1:10) 
+
+ref_crime1 %>% 
+  filter(!is.na(state)) %>%
+  ggplot(aes(x = reorder(state, -sum), y = sum)) +
+  geom_bar(stat = "identity", na.rm=T) +
+  labs(x = "State", y = "Number of Refugee Arrivals") +
+  theme_bw()
+
+```
+
+# Figure 1: Refugee arrivals nationwide (left panel) 
+
+```{r}
+
+refugees %>% 
+  group_by(year) %>%
+  summarize(refugees_year = sum(refugees)) %>% 
+  ggplot(aes(x = year, y = refugees_year)) +
+  geom_line() +
+  geom_vline(xintercept = 2016, color = "firebrick", linetype = 2) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(breaks = seq(2000, 2020, 5), limits = c(2000, 2020)) +
+  labs(title = "Nationwide Refugee Arrivals in the US", x = "Year", y = "New Refugee Arrivals") +
+  theme_bw()
+```
+
+Figure 1: top/middle/bottom tercile counties (right panel)
+```{r}
+
+#gets  average number of arrivals for counties in the top, middle, and bottom tercile in terms of arrivals between 2002 and 2016 but deletes the year column
+
+#summarize - one observation per group 
+#remove grouping structure by county code - do ntile and plot means 
+#first create ntile, then group by year ntile then summarize to get the mean
+
+#creating tertiles first
+
+refugees <- refugees %>% 
+  filter(refugees > "0")
+
+refugees$ref_tercile <- ntile(refugees$refugees, 3)
+
+ref1 <- refugees %>% 
+  group_by(ref_tercile, year) %>% 
+  summarize(ref_means = mean(refugees, na.rm=T)) %>% 
+  mutate()
+
+ref1 %>% 
+  ggplot(aes(x = year, y = ref_means, group = as.factor(ref_tercile), color = as.factor(ref_tercile))) +
+  geom_line() +
+  geom_vline(xintercept = 2016, color = "firebrick", linetype = 2) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(breaks = seq(2005, 2018, 5), limits = c(2005, 2018)) +
+  scale_color_manual(name = "Top, Middle, Bottom Tercile Counties", 
+                     labels = c("Bottom", "Middle", "Top"),
+                     values = c("red", "green", "blue")) +
+  scale_fill_manual(name = "Top, Middle, Bottom Tercile Counties",
+                    labels = c("Bottom", "Middle", "Top"),
+                      values = c("red3", "green4", "blue4")) +
+  labs(title = "Refugee Arrivals in the US by Tercile", x = "Year",
+       y = "New Refugee Arrivals") +
+  theme_bw()
+
+```
+
+Pretrends
+Figure A4
+```{r}
+pretrends <- ref_crime %>% 
+  filter(year >= "2010")
+
+pretrends$ref_tercile <- ntile(pretrends$refugees, 3)
+
+pretrends1 <- pretrends %>% 
+  group_by(ref_tercile, year) %>% 
+  summarize(rpcrime_means = mean(rproperty_crime, na.rm=T),
+            lpcrime_means = mean(lproperty_crime, na.rm=T),
+            rvcrime_means = mean(rviolent_crime, na.rm=T),
+            lvcrime_means = mean(lviolent_crime, na.rm=T)) %>% 
+  mutate()
+
+#property crimes graph
+pretrends1 %>% 
+  ggplot(aes(x = year, y = rpcrime_means, group = ref_tercile,
+             color = as.factor(ref_tercile))) +
+  geom_line() +
+  geom_vline(xintercept = 2016, color = "firebrick", linetype = 2) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(breaks = seq(2010, 2018, 2), limits = c(2010, 2018)) +
+  scale_color_manual(name = "Refugee Receiving Counties",
+                     labels = c("Bottom", "Middle", "Top"), 
+                     values = c("red", "green", "blue")) +
+  scale_fill_manual(name = "Refugee Receiving Counties",
+                     labels = c("Bottom", "Middle", "Top"), 
+                     values = c("red", "green", "blue")) +
+  labs(title = "Property Crimes",
+       x = "Year",
+       y = "Property Crimes Rate") +
+  theme_bw() 
+
+#log property crimes graph
+pretrends1 %>% 
+  ggplot(aes(x = year, y = lpcrime_means, group = ref_tercile,
+             color = as.factor(ref_tercile))) +
+  geom_line() +
+  geom_vline(xintercept = 2016, color = "firebrick", linetype = 2) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(breaks = seq(2010, 2018, 2), limits = c(2010, 2018)) +
+  scale_color_manual(name = "Refugee Receiving Counties",
+                     labels = c("Bottom", "Middle", "Top"), 
+                     values = c("red", "green", "blue")) +
+  scale_fill_manual(name = "Refugee Receiving Counties",
+                     labels = c("Bottom", "Middle", "Top"), 
+                     values = c("red", "green", "blue")) +
+  labs(title = "Log Property Crimes",
+       x = "Year",
+       y = "Log Property Crimes Rate") +
+  theme_bw() 
+
+#violent crimes graph
+pretrends1 %>% 
+  ggplot(aes(x = year, y = rvcrime_means, group = ref_tercile,
+             color = as.factor(ref_tercile))) +
+  geom_line() +
+  geom_vline(xintercept = 2016, color = "firebrick", linetype = 2) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(breaks = seq(2010, 2018, 2), limits = c(2010, 2018)) +
+  scale_color_manual(name = "Refugee Receiving Counties",
+                     labels = c("Bottom", "Middle", "Top"), 
+                     values = c("red", "green", "blue")) +
+  scale_fill_manual(name = "Refugee Receiving Counties",
+                     labels = c("Bottom", "Middle", "Top"), 
+                     values = c("red", "green", "blue")) +
+  labs(title = "Violent Crimes",
+       x = "Year",
+       y = "Violent Crimes Rate") +
+  theme_bw()
+
+#log violent crimes
+pretrends1 %>% 
+  ggplot(aes(x = year, y = lvcrime_means, group = ref_tercile,
+             color = as.factor(ref_tercile))) +
+  geom_line() +
+  geom_vline(xintercept = 2016, color = "firebrick", linetype = 2) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(breaks = seq(2010, 2018, 2), limits = c(2010, 2018)) +
+  scale_color_manual(name = "Refugee Receiving Counties",
+                     labels = c("Bottom", "Middle", "Top"), 
+                     values = c("red", "green", "blue")) +
+  scale_fill_manual(name = "Refugee Receiving Counties",
+                     labels = c("Bottom", "Middle", "Top"), 
+                     values = c("red", "green", "blue")) +
+  labs(title = "Log Violent Crimes",
+       x = "Year",
+       y = "Log Violent Crimes Rate") +
+  theme_bw()
+
+```

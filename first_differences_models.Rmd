@@ -1,0 +1,257 @@
+---
+title: "first differences"
+author: "Christine Schulz"
+date: "April 19, 2022"
+output: 
+  pdf_document:
+    keep_tex: yes
+    
+tables: true
+graphics: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(haven)
+library(tidyverse)
+library(fixest)
+```
+
+```{r}
+crime <- read_dta("~/R/replication_project_pols6200/crime.dta")
+county <- read_dta("~/R/replication_project_pols6200/county_dict.dta")
+
+refugees <- read_dta("~/R/replication_project_pols6200/wraps_fips.dta")
+demographics <- read_dta("~/R/replication_project_pols6200/demographics.dta")
+```
+
+can also create the first differences - subtracting post period from pre period 
+- one observation per county
+- recreate and see how you can change the regression 
+
+Creating the variables
+```{r}
+
+refugees <- refugees %>% 
+  filter(year >= "2015")
+
+crime <- crime %>%  
+  select(state = "state", fips = "fips", year = "year", property_crime = "property_crime", violent_crime = "violent_crime",
+         cleared_property_crime = "cleared_property_crime", cleared_violent_crime = "cleared_violent_crime")
+
+ref_crime <- left_join(refugees, crime)
+
+fdiff <- left_join(ref_crime, demographics) 
+
+#create vars
+fdiff <- fdiff %>% 
+  mutate(lproperty_crime = log(property_crime + 1),
+         rproperty_crime = (property_crime / pop_total) * 100000,
+         lviolent_crime = log(violent_crime + 1),
+         rviolent_crime = (violent_crime / pop_total) * 100000,
+         lrefugees = log(refugees + 1),
+         rrefugees = (refugees / pop_total) * 100,
+         s_movers = (pop_moved_in_1_yr_ago / pop_total) * 100000,
+         l_movers = log(pop_moved_in_1_yr_ago + 1),
+         s_clr_property = cleared_property_crime / property_crime,
+         s_clr_violent = cleared_violent_crime / violent_crime,
+         log_pop_total = log(pop_total),
+         log_pop_density <- log(pop_density))
+
+```
+
+```{r}
+#pooling pre and post periods
+
+fdiff$fyear <-  ifelse(fdiff$year %in% c("2015", "2016"), "2016", "2017")
+
+#pooling data before plm for first differences
+
+fdiff2 <- fdiff %>% 
+  group_by(fyear, fips) %>% 
+  summarize(lproperty_crime = sum(lproperty_crime),
+            rproperty_crime = sum(rproperty_crime),
+            rviolent_crime = sum(rviolent_crime),
+            lviolent_crime = sum(lviolent_crime),
+            rrefugees = sum(rrefugees),
+            lrefugees = sum(lrefugees),
+            pop_total = sum(pop_total),
+            pop_density = sum(pop_density),
+            s_black = sum(s_black),
+            s_hisp = sum(s_hisp), 
+            s_hs_dropout = sum(s_hs_dropout),
+            s_unempl = sum(s_unempl),
+            s_not_in_lf = sum(s_not_in_lf),
+            s_white = sum(s_white),
+            s_police_male = sum(s_police_male),
+            s_movers = sum(s_movers),
+            s_hs_grad = sum(s_hs_grad),
+            s_male_age_15_34 = sum(s_male_age_15_34),
+            l_movers = sum(l_movers),
+            s_clr_property = sum(s_clr_property),
+            s_clr_violent = sum(s_clr_violent))
+
+
+#creating trt based on if year is2017 and 2016 value for median - transformed refugee var
+fdiff2 <- fdiff2 %>% 
+  group_by(fips) %>% 
+  arrange(fyear) %>% 
+  mutate(treatedr = ifelse(fyear == 2017 & lag(rrefugees) > median(rrefugees), 1, 0)) 
+
+fdiff2 <- fdiff2 %>% 
+  group_by(fips) %>% 
+  arrange(fyear) %>% 
+  mutate(treatedl = ifelse(fyear == 2017 & lag(lrefugees) > median(lrefugees), 1, 0)) 
+
+fdiff2$after_2017 <- ifelse(fdiff2$fyear == "2017", 1, 0)
+```
+
+
+```{r}
+
+library(plm)
+
+#plm - data pooled beforehand
+
+pdata <- pdata.frame(fdiff2, index = c("fips","fyear"))
+
+fd_rpcrime <- plm(rproperty_crime ~ treatedr - 1, 
+         data = pdata, model = "fd")
+summary(fd_rpcrime)
+
+fd_rpcrimec <- plm(rproperty_crime ~ treatedr  + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad 
+                   + s_hs_dropout - 1, data = pdata, model = "fd")
+summary(fd_rpcrimec)
+
+fd_rvcrime <- plm(rviolent_crime ~ treatedr - 1,
+           data = pdata, model = "fd")
+summary(fd_rvcrime)
+
+fd_rvcrimec <- plm(rviolent_crime ~ treatedr + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad
+                   + s_hs_dropout - 1, data = pdata, model = "fd")
+summary(fd_rvcrimec)
+
+#log
+fd_lpcrime <- plm(lproperty_crime ~ treatedl -1, data = pdata, model = "fd")
+
+fd_lpcrimec <- plm(lproperty_crime ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad 
+                   + s_hs_dropout - 1, data = pdata, model = "fd")
+
+fd_lvcrime <- plm(lviolent_crime ~ treatedl - 1, data = pdata, model = "fd")
+
+fd_lvcrimec <- plm(lviolent_crime ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad 
+                   + s_hs_dropout - 1, data = pdata, model = "fd")
+```
+
+coefficient plot
+```{r}
+#coef plots
+library(jtools)
+library(ggstance)
+
+plot_summs(fd_rpcrime, fd_rvcrime, fd_lvcrime, fd_lpcrime,
+           coefs = c("Property Crime" = "rproperty_crime", 
+                     "Violent Crime" = "rviolent_crime",
+                     "Log Refugees" = "treatedl", "Refugees" = "treatedr"), scale = TRUE, robust = TRUE,
+           model.names = c("Property Crime", "Violent Crime", 
+                           "Log Property Crime", "Log Violent Crime"))
+
+```
+
+```{r}
+plot_summs(fd_rpcrimec, fd_rvcrimec, fd_lpcrimec, fd_lvcrimec,
+           coefs = c("Property Crime" = "rproperty_crime", 
+                     "Violent Crime" = "rviolent_crime", 
+                     "Log Refugees" = "treatedl", "Refugees" = "treatedr", 
+                     "Population Total" = "pop_total",
+                 "Share White Pop." = "s_white", "Share Black Pop." = "s_black",
+                 "Share Hispanic Pop." = "s_hisp", 
+                 "Unemployment Rate" = "s_unempl",
+                 "Males Aged 15-34" = "s_male_age_15_34", 
+                 "Highschool Graduate" = "s_hs_grad",
+                 "Highschool Dropout" = "s_hs_dropout", 
+                 "Out of Labor Force" = "s_not_in_lf")
+           , scale = TRUE, robust = TRUE,
+           model.names = c("Property Crime", "Violent Crime", 
+                           "Log Property Crime", "Log Violent Crime"))
+```
+
+```{r, results = 'asis'}
+#regression tables
+library(modelsummary)
+models <- list("Property Crime" = plm(rproperty_crime ~ treatedr - 1, 
+         data = pdata, model = "fd"),
+         "Violent Crime" = plm(rviolent_crime ~ treatedr - 1,
+           data = pdata, model = "fd"),
+         "Log Property Crime" = plm(lproperty_crime ~ treatedl -1, 
+                                   data = pdata, model = "fd"),
+         "Log Violent Crime" = plm(lviolent_crime ~ treatedl - 1, 
+                                   data = pdata, model = "fd"))
+
+models_controls <- list("Property Crime" = plm(rproperty_crime ~ treatedr  + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad 
+                   + s_hs_dropout - 1, data = pdata, model = "fd"),
+                   "Violent Crime" = plm(rviolent_crime ~ treatedr + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad
+                   + s_hs_dropout - 1, data = pdata, model = "fd"),
+                   "Log Property Crime" = plm(lproperty_crime ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad 
+                   + s_hs_dropout - 1, data = pdata, model = "fd"),
+                   "Log Violent Crime" = plm(lviolent_crime ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad 
+                   + s_hs_dropout - 1, data = pdata, model = "fd"))
+
+modelsummary(models, coef_rename = c(treatedr = "Refugee Arrivals",
+                 treatedl = "Log Refugee Arrivals"),
+             title = "The Effect of the Executive Order on Local Crime Rates: First Differences, 2015-2018",
+             output = "markdown")
+
+modelsummary(models_controls, coef_rename = c(treatedr = "Refugee Arrivals",
+                 treatedl = "Log Refugee Arrivals",
+                 pop_total = "Population Total",
+                 s_white = "Share White Pop.", s_black = "Share Black Pop.",
+                 s_hisp = "Share Hispanic Pop.", 
+                 s_unempl = "Unemployment Rate",
+                 s_male_age_15_34 = "Males Aged 15-34", 
+                 s_hs_grad = "Highschool Graduate",
+                 s_hs_dropout = "Highschool Dropout", 
+                 s_not_in_lf = "Out of Labor Force"),
+             title = "The Effect of the Executive Order on Local Crime Rates: First Differences, 2015-2018",
+             output = "markdown")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

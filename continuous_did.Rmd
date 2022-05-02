@@ -1,0 +1,603 @@
+---
+title: "Continuous Did"
+author: "Christine Schulz"
+date: "April 19, 2022"
+output: 
+  pdf_document:
+    keep_tex: yes
+    
+tables: true
+graphics: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(haven)
+library(tidyverse)
+library(fixest)
+```
+
+```{r}
+crime <- read_dta("~/R/replication_project_pols6200/crime.dta")
+county <- read_dta("~/R/replication_project_pols6200/county_dict.dta")
+
+refugees <- read_dta("~/R/replication_project_pols6200/wraps_fips.dta")
+demographics <- read_dta("~/R/replication_project_pols6200/demographics.dta")
+```
+
+run continous treat on year county fixed effects - w refugee number on crime statistics - naive twfe
+- give quantity that may or may not be similar to what they find
+- this is what they did in the second part of the paper
+
+Continuous DiD Model
+```{r}
+### making correct data set for continuous did
+
+refugees1 <- refugees %>% 
+  filter(year >= "2010")
+
+crime1 <- crime %>%  
+  select(state = "state", fips = "fips", year = "year", property_crime = "property_crime", violent_crime = "violent_crime",
+         cleared_property_crime = "cleared_property_crime", cleared_violent_crime = "cleared_violent_crime")
+
+ref_crime <- left_join(refugees1, crime1)
+
+cdid <- left_join(ref_crime, demographics) 
+
+#vars
+cdid <- cdid %>% 
+  mutate(lproperty_crime = log(property_crime + 1),
+         rproperty_crime = (property_crime / pop_total) * 100000,
+         lviolent_crime = log(violent_crime + 1),
+         rviolent_crime = (violent_crime / pop_total) * 100000,
+         lrefugees = log(refugees + 1),
+         rrefugees = (refugees / pop_total) * 100,
+         s_movers = (pop_moved_in_1_yr_ago / pop_total) * 100000,
+         l_movers = log(pop_moved_in_1_yr_ago + 1),
+         s_clr_property = cleared_property_crime / property_crime,
+         s_clr_violent = cleared_violent_crime / violent_crime,
+         log_pop_total = log(pop_total),
+         log_pop_density <- log(pop_density))
+ 
+#creating trt based on if year is2017 and 2016 value for median - transformed refugee var
+cdid <- cdid %>% 
+  group_by(fips) %>% 
+  arrange(year) %>% 
+  mutate(treatedr = ifelse(year == 2017 & lag(rrefugees) > median(rrefugees), 1, 0)) %>% 
+  mutate(treatedr = ifelse(year == 2018 & lag(rrefugees, 2) > median(rrefugees), 1, treatedr))
+
+cdid <- cdid %>% 
+  group_by(fips) %>% 
+  arrange(year) %>% 
+  mutate(treatedl = ifelse(year == 2017 & lag(lrefugees) > median(lrefugees), 1, 0)) %>% 
+  mutate(treatedl = ifelse(year == 2018 & lag(lrefugees, 2) > median(lrefugees), 1, treatedl))
+
+```
+
+
+```{r}
+##continous did models - with all years & no dummy interacted for year
+  #still need to add county-specific linear time trends allowing
+  #for idiosyncratic trends across localities
+
+#regular
+cdidr_pcrime <- feols(rproperty_crime ~ treatedr | fips + year, cluster = "state", cdid)
+summary(cdidr_pcrime)
+
+
+cdidr_pcrimec <- feols(rproperty_crime ~ treatedr  + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidr_pcrimec)
+
+cdidr_vcrime <- feols(rviolent_crime ~ treatedr | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidr_vcrime)
+
+cdidr_vcrimec <- feols(rviolent_crime ~ treatedr + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidr_vcrimec)
+
+#log
+cdidl_pcrime <- feols(lproperty_crime ~ treatedl | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidl_pcrime)
+
+cdidl_pcrimec <- feols(lproperty_crime ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad 
+                       + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidl_pcrimec)
+
+cdidl_vcrime <- feols(lviolent_crime ~ treatedl | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidl_vcrime)
+
+cdidl_vcrimec <- feols(lviolent_crime ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidl_vcrimec)
+```
+coeficient plot
+```{r}
+#plot summs
+library(jtools)
+library(ggstance)
+plot_summs(cdidr_pcrime, cdidr_vcrime, cdidl_vcrime, cdidl_pcrime, 
+           coefs = c("Refugee Arrivals" = "treatedr", 
+                     "Log Refugee Arrivals" = "treatedl"),
+           model.names = c("Property Crime", "Violent Crime", 
+                           "Log Property Crime", "Log Violent Crime"))
+```
+
+```{r}
+
+plot_summs(cdidr_pcrimec, cdidr_vcrimec, cdidl_vcrimec, cdidl_pcrimec, 
+           coefs = c("Refugee Arrivals" = "treatedr", 
+                     "Log Refugee Arrivals" = "treatedl",
+                     "Population Total" = "pop_total",
+                 "Share White Pop." = "s_white", "Share Black Pop." = "s_black",
+                 "Share Hispanic Pop." = "s_hisp", "Unemployment Rate" = "s_unempl",
+                 "Males Aged 15-34" = "s_male_age_15_34", 
+                 "Highschool Graduate" = "s_hs_grad",
+                 "Highschool Dropout" = "s_hs_dropout", 
+                 "Out of Labor Force" = "s_not_in_lf"),
+           model.names = c("Property Crime", "Violent Crime", 
+                           "Log Property Crime", "Log Violent Crime"))
+
+
+```
+
+
+
+event study plot main results
+```{r}
+
+# Use i() in feols to include time dummies,
+# specifying that we want to drop t = 5 as the reference
+
+#create fake treatment vars - this one works i think
+cdid <- cdid %>% 
+  mutate(fakeTreat = ifelse(treatedr %in% "0", 1, 1 ))
+
+m <- feols(rproperty_crime ~ i(year, fakeTreat, ref = 2016) | state, data = cdid)
+coefplot(m, pt.join = TRUE, ref.line = TRUE)
+
+m1 <- feols(rviolent_crime ~ i(year, fakeTreat, ref = 2016) | state, data = cdid)
+coefplot(m1, pt.join = TRUE, ref.line = TRUE)
+
+m2 <- feols(lproperty_crime ~ i(year, fakeTreat, ref = 2016) | state, data = cdid)
+coefplot(m2, pt.join = TRUE, ref.line = TRUE)
+
+m3 <- feols(lviolent_crime ~ i(year, fakeTreat, ref = 2016) | state, data = cdid)
+coefplot(m3, pt.join = TRUE, ref.line = TRUE)
+
+```
+
+```{r, results='asis'}
+setFixest_dict(c(rproperty_crime = "Property Crime", 
+                 lproperty_crime = "Log Property Crime",
+                 treatedr = "Refugee Arrivals",
+                 treatedl = "Log Refugee Arrivals",
+                 fips = "County",
+                 fyear = "Year",
+                 lviolent_crime = "Log Violent Crime",
+                 rviolent_crime = "Violent Crime",
+                 pop_total = "Population Total",
+                 s_white = "Share White Pop.", s_black = "Share Black Pop.",
+                 s_hisp = "Share Hispanic Pop.", 
+                 s_unempl = "Unemployment Rate",
+                 s_male_age_15_34 = "Males Aged 15-34", 
+                 s_hs_grad = "Highschool Graduate",
+                 s_hs_dropout = "Highschool Dropout", 
+                 s_not_in_lf = "Out of Labor Force",
+                 s_police_male = "Male Police",
+                 s_clr_property = "Cleared Property Crime",
+                 s_clr_violent = "Cleared Violent Crime",
+                 l_movers = "Log In-Movers",
+                 s_movers = "In-Movers"))
+
+my_style <- style.df(depvar.title = "", fixef.title = "",
+                     fixef.suffix = " Fixed Effects", yesNo = "yes")
+setFixest_etable(style.df = my_style)
+
+styling = function(x, font){
+  tex2add = ""
+  if(!missing(font)){
+    tex2add = paste0("\\footnotesize")
+    }
+  if(nchar(tex2add) > 0){
+    x[x == "%start:tab\n"] = tex2add
+    }
+  x
+}
+
+```
+# estimates without controls
+```{r, results='asis'}
+
+etable(cdidr_pcrime, cdidr_vcrime, cdidl_vcrime, cdidl_pcrime, 
+       fitstat = ~n,
+       postprocess.tex = styling,
+       font = "footnotesize",
+       tex = TRUE,
+       style.tex = style.tex("aer"),
+       title = "The Executive Order on Local Crime Rates: 
+       Differences-in-Differences, 2015-2018")
+
+```
+estimates with controls
+```{r, results='asis'}
+etable(cdidr_pcrimec, cdidr_vcrimec, cdidl_vcrimec, cdidl_pcrimec, 
+       fitstat = ~n,
+       postprocess.tex = styling,
+       font = "footnotesize",
+       tex = TRUE,
+       style.tex = style.tex("aer"),
+       title = "The Executive Order on Local Crime Rates: 
+       Differences-in-Differences, 2015-2018")
+```
+Regular estimates and regular estimates with controls
+```{r, results='asis'}
+
+etable(cdidr_pcrime, cdidr_pcrimec, cdidr_vcrime, cdidr_vcrimec, 
+       fitstat = ~n,
+       postprocess.tex = styling,
+       font = "footnotesize",
+       tex = TRUE,
+       style.tex = style.tex("aer"),
+       title = "The Executive Order on Local Crime Rates: 
+       Differences-in-Differences, 2015-2018")
+
+```
+Log estimates and log estimates with controls
+```{r, results = 'asis'}
+
+etable(cdidl_pcrime, cdidl_pcrimec, cdidl_vcrime, cdidl_vcrimec, 
+       fitstat = ~n,
+       postprocess.tex = styling,
+       font = "footnotesize",
+       tex = TRUE,
+       style.tex = style.tex("aer"),
+       title = "The Executive Order on Local Crime Rates: 
+       Differences-in-Differences, 2015-2018")
+```
+
+Additional specifications done by the author
+
+```{r}
+#subset to urban counties
+
+cdid <- cdid %>%  
+  mutate(ntile = ntile(pop_density, 2),
+         urban = ifelse(ntile >= "2", 1, 0))
+
+cdid2 <- cdid %>% 
+  filter(urban %in% "1")
+
+#regular
+cdidr_pcrime1 <- feols(rproperty_crime ~ treatedr | fips 
+                      + year, cluster = "state", cdid2)
+summary(cdidr_pcrime1)
+
+cdidr_pcrime1c <- feols(rproperty_crime ~ treatedr + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad 
+                       + s_hs_dropout | year + fips, cluster = "state", cdid2)
+summary(cdidr_pcrime1c)
+
+cdidr_vcrime1 <- feols(rviolent_crime ~ treatedr | fips 
+                      + year, cluster = "state", cdid2)
+summary(cdidr_vcrime1)
+
+cdidr_vcrime1c <- feols(rviolent_crime ~ treatedr + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid2)
+summary(cdidr_vcrime1c)
+
+#log
+cdidl_pcrime1 <- feols(lproperty_crime ~ treatedl | fips 
+                      + year, cluster = "state", cdid2)
+summary(cdidl_pcrime1)
+
+cdidl_pcrime1c <- feols(lproperty_crime ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad 
+                       + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid2)
+summary(cdidl_pcrime1c)
+
+cdidl_vcrime1 <- feols(lviolent_crime ~ treatedl | fips 
+                      + year, cluster = "state", cdid2)
+summary(cdidl_vcrime1)
+
+cdidl_vcrime1c <- feols(lviolent_crime ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid2)
+summary(cdidl_vcrime1c)
+
+```
+
+```{r, results = 'asis'}
+
+etable(cdidr_pcrime1, cdidr_vcrime1, cdidl_pcrime1, cdidl_vcrime1,
+       fitstat = ~n,
+       postprocess.tex = styling,
+       font = "footnotesize",
+       tex = TRUE,
+       style.tex = style.tex("aer"),
+       title = "Differences-in-Differences Estimates Subsetted to 
+       Urban Counties, 2015-2018")
+```
+
+```{r, results = 'asis'}
+
+etable(cdidr_pcrime1c, cdidr_vcrime1c, cdidl_pcrime1c, cdidl_vcrime1c, 
+       fitstat = ~n,
+       postprocess.tex = styling,
+       font = "footnotesize",
+       tex = TRUE,
+       style.tex = style.tex("aer"),
+       title = "Differences-in-Differences Log Estimates Subsetted to 
+       Urban Counties, 2015-2018")
+```
+Coefficient plot - subset to urban counties
+```{r}
+#models w controls
+plot_summs(cdidr_pcrime1, cdidr_vcrime1, cdidl_vcrime1, cdidl_pcrime1, 
+           coefs = c("Refugee Arrivals" = "treatedr", 
+                     "Log Refugee Arrivals" = "treatedl"),
+           model.names = c("Property Crime", "Violent Crime", 
+                           "Log Property Crime", "Log Violent Crime"))
+
+
+#models w controls
+plot_summs(cdidr_pcrime1c, cdidr_vcrime1c, cdidl_vcrime1c, cdidl_pcrime1c, 
+           coefs = c("Refugee Arrivals" = "treatedr", 
+                     "Log Refugee Arrivals" = "treatedl",
+                     "Population Total" = "pop_total",
+                 "Share White Pop." = "s_white", "Share Black Pop." = "s_black",
+                 "Share Hispanic Pop." = "s_hisp", "Unemployment Rate" = "s_unempl",
+                 "Males Aged 15-34" = "s_male_age_15_34", 
+                 "Highschool Graduate" = "s_hs_grad",
+                 "Highschool Dropout" = "s_hs_dropout", 
+                 "Out of Labor Force" = "s_not_in_lf"),
+           model.names = c("Property Crime", "Violent Crime", 
+                           "Log Property Crime", "Log Violent Crime"))
+
+```
+
+Share male police as outcome
+```{r}
+##models with dummy for year interacted with dummy var for refugees
+#regular
+cdidr_police <- feols(s_police_male ~ treatedr | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidr_police)
+
+cdidr_policec <- feols(s_police_male ~ treatedr + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | year + fips, cluster = "state", cdid)
+summary(cdidr_policec)
+
+
+#log
+cdidl_police <- feols(s_police_male ~ treatedl | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidl_police)
+
+cdidl_policec <- feols(s_police_male ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidl_policec)
+
+```
+
+```{r, results = 'asis'}
+
+etable(cdidr_police, cdidr_policec, cdidl_police, cdidl_policec,
+       fitstat = ~n,
+       postprocess.tex = styling,
+       font = "footnotesize",
+       tex = TRUE,
+       style.tex = style.tex("aer"),
+       title = "The Executive Order on Male Police: 
+       Differences-in-Differences, 2015-2018")
+```
+Coefficient plot - share male police
+```{r}
+#models w controls
+plot_summs(cdidr_police, cdidl_police, 
+           coefs = c("Refugee Arrivals" = "treatedr", 
+                     "Log Refugee Arrivals" = "treatedl"),
+           model.names = c("Male Police", "Log Male Police"))
+
+#models w controls
+plot_summs(cdidr_policec, cdidl_policec, 
+           coefs = c("Refugee Arrivals" = "treatedr", 
+                     "Log Refugee Arrivals" = "treatedl",
+                     "Population Total" = "pop_total",
+                 "Share White Pop." = "s_white", "Share Black Pop." = "s_black",
+                 "Share Hispanic Pop." = "s_hisp", "Unemployment Rate" = "s_unempl",
+                 "Males Aged 15-34" = "s_male_age_15_34", 
+                 "Highschool Graduate" = "s_hs_grad",
+                 "Highschool Dropout" = "s_hs_dropout", 
+                 "Out of Labor Force" = "s_not_in_lf",
+                 "Male Police" = "s_police_male"),
+           model.names = c("Male Police", "Log Male Police"))
+
+```
+
+share in movers as outcome
+```{r}
+##models with dummy for year interacted with dummy var for refugees
+#regular
+cdidr_movers <- feols(s_movers ~ treatedr | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidr_movers)
+
+cdidr_moversc <- feols(s_movers ~ treatedr + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | year + fips, cluster = "state", cdid)
+summary(cdidr_moversc)
+
+
+#log
+cdidl_movers <- feols(l_movers ~ treatedl | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidl_movers)
+
+cdidl_moversc <- feols(l_movers ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidl_moversc)
+
+```
+
+```{r, results = 'asis'}
+
+etable(cdidr_movers, cdidr_moversc, cdidl_movers, cdidl_moversc,
+       fitstat = ~n,
+       postprocess.tex = styling,
+       font = "footnotesize",
+       tex = TRUE,
+       style.tex = style.tex("aer"),
+       title = "The Executive Order on Share of In-Movers: 
+       Differences-in-Differences, 2015-2018")
+```
+
+Coefficient plot - movers
+```{r}
+#models w controls
+plot_summs(cdidr_movers, cdidl_movers, 
+           coefs = c("Refugee Arrivals" = "treatedr", 
+                     "Log Refugee Arrivals" = "treatedl"),
+           model.names = c("In-Movers", "Log In-Movers"))
+
+#models w controls
+plot_summs(cdidr_moversc, cdidl_moversc, 
+           coefs = c("Refugee Arrivals" = "treatedr", 
+                     "Log Refugee Arrivals" = "treatedl",
+                     "Population Total" = "pop_total",
+                 "Share White Pop." = "s_white", "Share Black Pop." = "s_black",
+                 "Share Hispanic Pop." = "s_hisp", "Unemployment Rate" = "s_unempl",
+                 "Males Aged 15-34" = "s_male_age_15_34", 
+                 "Highschool Graduate" = "s_hs_grad",
+                 "Highschool Dropout" = "s_hs_dropout", 
+                 "Out of Labor Force" = "s_not_in_lf",
+                 "Male Police" = "s_police_male"),
+           model.names = c("In-Movers", "Log In-Movers"))
+
+```
+
+Share cleared crimes as outcome
+
+```{r}
+##models with dummy for year interacted with dummy var for refugees
+#regular
+cdidr_clr_pcrime <- feols(s_clr_property ~ treatedr | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidr_clr_pcrime)
+
+cdidr_clr_pcrimec <- feols(s_clr_property ~ treatedr + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad 
+                       + s_hs_dropout | year + fips, cluster = "state", cdid)
+summary(cdidr_clr_pcrimec)
+
+cdidr_clr_vcrime <- feols(s_clr_violent ~ treatedr | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidr_clr_vcrime)
+
+cdidr_clr_vcrimec <- feols(s_clr_violent ~ treatedr + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad
+                       + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidr_clr_vcrimec)
+
+#log
+cdidl_clr_pcrime <- feols(s_clr_property ~ treatedl | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidl_clr_pcrime)
+
+cdidl_clr_pcrimec <- feols(s_clr_property ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad
+                       + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidl_clr_pcrimec)
+
+cdidl_clr_vcrime <- feols(s_clr_violent ~ treatedl | fips 
+                      + year, cluster = "state", cdid)
+summary(cdidl_clr_vcrime)
+
+cdidl_clr_vcrimec <- feols(s_clr_violent ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad
+                       + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid)
+
+
+
+```
+
+```{r, results = 'asis'}
+
+etable(cdidr_clr_pcrime, cdidl_clr_pcrime, cdidr_clr_vcrime, cdidl_clr_vcrime, 
+       fitstat = ~n,
+       postprocess.tex = styling,
+       font = "footnotesize",
+       tex = TRUE,
+       style.tex = style.tex("aer"),
+       title = "The Executive Order on Cleared Crime: 
+       Differences-in-Differences, 2015-2018")
+```
+
+Cleared crime with controls 
+```{r, results = 'asis'}
+
+etable(cdidr_clr_pcrimec, cdidl_clr_pcrimec, cdidr_clr_vcrimec, cdidl_clr_vcrimec,
+       fitstat = ~n,
+       postprocess.tex = styling,
+       font = "footnotesize",
+       tex = TRUE,
+       style.tex = style.tex("aer"),
+       title = "The Executive Order on Cleared Crime with Controls: 
+       Differences-in-Differences, 2015-2018")
+```
+
+Coefficient plot - cleared crime
+```{r}
+#models w controls
+plot_summs(cdidr_clr_pcrime, cdidr_clr_vcrime, cdidl_clr_vcrime, cdidl_clr_pcrime, 
+           coefs = c("Refugee Arrivals" = "treatedr", 
+                     "Log Refugee Arrivals" = "treatedl"),
+           model.names = c("Cleared Property Crime", "Cleared Violent Crime", 
+                           "Log Cleared Property Crime", "Log Cleared Violent Crime"))
+
+#models w controls
+plot_summs(cdidr_clr_pcrimec, cdidr_clr_vcrimec, cdidl_clr_vcrimec, cdidl_clr_pcrimec, 
+           coefs = c("Refugee Arrivals" = "treatedr", 
+                     "Log Refugee Arrivals" = "treatedl",
+                     "Population Total" = "pop_total",
+                 "Share White Pop." = "s_white", "Share Black Pop." = "s_black",
+                 "Share Hispanic Pop." = "s_hisp", "Unemployment Rate" = "s_unempl",
+                 "Males Aged 15-34" = "s_male_age_15_34", 
+                 "Highschool Graduate" = "s_hs_grad",
+                 "Highschool Dropout" = "s_hs_dropout", 
+                 "Out of Labor Force" = "s_not_in_lf",
+                 "Male Police" = "s_police_male"),
+           model.names = c("Cleared Property Crime", "Cleared Violent Crime", 
+                           "Log Cleared Property Crime", "Log Cleared Violent Crime"))
+
+```

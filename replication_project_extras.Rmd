@@ -1,0 +1,634 @@
+---
+title: "repication project extra code"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+```
+
+```{r}
+crime <- read_dta("~/R/replication_project_pols6200/crime.dta")
+county <- read_dta("~/R/replication_project_pols6200/county_dict.dta")
+
+refugees <- read_dta("~/R/replication_project_pols6200/wraps_fips.dta")
+demographics <- read_dta("~/R/replication_project_pols6200/demographics.dta")
+```
+
+creating variables the long way for the replication project
+
+```{r}
+#creating dataset with all necessary vars that I can use for other analyses instead
+  #of creating new vars each time
+
+crime1 <- crime %>%  
+  select(state = "state", fips = "fips", year = "year", property_crime = "property_crime", violent_crime = "violent_crime",
+         cleared_property_crime = "cleared_property_crime", cleared_violent_crime = "cleared_violent_crime")
+
+ref_crime1 <- left_join(refugees, crime1)
+
+ref_crime <- left_join(ref_crime1, demographics) 
+
+#vars
+
+ref_crime$lproperty_crime <- log(ref_crime$property_crime + 1)
+
+ref_crime$rproperty_crime <- (ref_crime$property_crime / ref_crime$pop_total) * 100000
+
+ref_crime$lviolent_crime <- log(ref_crime$violent_crime + 1)
+
+ref_crime$rviolent_crime <- (ref_crime$violent_crime / ref_crime$pop_total) * 100000
+
+ref_crime$lrefugees <- log(ref_crime$refugees + 1)
+
+ref_crime$rrefugees <- (ref_crime$refugees / ref_crime$pop_total) * 100
+
+#other vars that i dont know where they go/what they do
+
+ref_crime$s_movers <- (ref_crime$pop_moved_in_1_yr_ago / ref_crime$pop_total) * 100000
+
+ref_crime$l_movers <- log(ref_crime$pop_moved_in_1_yr_ago + 1)
+
+ref_crime$s_clr_property <- ref_crime$cleared_property_crime / ref_crime$property_crime
+
+ref_crime$s_clr_violent <- ref_crime$cleared_violent_crime / ref_crime$violent_crime
+
+#might need to change this to just log in 2016
+ref_crime$log_pop_total <- log(ref_crime$pop_total)
+
+ref_crime$log_pop_density <- log(ref_crime$pop_density)
+
+
+
+```
+
+First differences bullshit
+```{r}
+#andrew heiss and class manual DiD 
+
+fdiff2 <- fdiff %>% 
+  group_by(fyear, fips) %>% 
+  summarize(lproperty_crime = sum(lproperty_crime),
+            rproperty_crime = sum(rproperty_crime),
+            rviolent_crime = sum(rviolent_crime),
+            lviolent_crime = sum(lviolent_crime),
+            rrefugees = sum(rrefugees),
+            lrefugees = sum(lrefugees),
+            pop_total = sum(pop_total),
+            pop_density = sum(pop_density),
+            s_black = sum(s_black),
+            s_hisp = sum(s_hisp), 
+            s_hs_dropout = sum(s_hs_dropout),
+            s_unempl = sum(s_unempl),
+            s_not_in_lf = sum(s_not_in_lf),
+            s_white = sum(s_white),
+            s_police_male = sum(s_police_male),
+            s_movers = sum(s_movers),
+            s_hs_grad = sum(s_hs_grad),
+            s_male_age_15_34 = sum(s_male_age_15_34),
+            l_movers = sum(l_movers),
+            s_clr_property = sum(s_clr_property),
+            s_clr_violent = sum(s_clr_violent))
+
+
+#creating trt based on if year is2017 and 2016 value for median - transformed refugee var
+fdiff2 <- fdiff2 %>% 
+  group_by(fips) %>% 
+  arrange(fyear) %>% 
+  mutate(treatedr = ifelse(fyear == 2017 & lag(rrefugees) > median(rrefugees), 1, 0)) 
+
+fdiff2 <- fdiff2 %>% 
+  group_by(fips) %>% 
+  arrange(fyear) %>% 
+  mutate(treatedl = ifelse(fyear == 2017 & lag(lrefugees) > median(lrefugees), 1, 0)) 
+
+fdiff2$after_2017 <- ifelse(fdiff2$fyear == "2017", 1, 0)
+
+diffs <- fdiff2 %>% 
+  group_by(after_2017, treatedr) %>% 
+  summarize(mean_rproperty_crime = mean(rproperty_crime, na.rm=T))
+
+before_treatment <- diffs %>% 
+  filter(after_2017 == 0, treatedr == 1) %>% 
+  pull(mean_rproperty_crime)
+
+before_control <- diffs %>% 
+  filter(after_2017 == 0, treatedr == 0) %>% 
+  pull(mean_rproperty_crime)
+
+after_treatment <- diffs %>% 
+  filter(after_2017 == 1, treatedr == 1) %>% 
+  pull(mean_rproperty_crime)
+
+after_control <- diffs %>% 
+  filter(after_2017 == 1, treatedr == 0) %>% 
+  pull(mean_rproperty_crime)
+
+diff_treatment_before_after <- after_treatment - before_treatment
+diff_treatment_before_after
+
+
+#calculating the first difference then running a basic regression like the internet showed me
+
+fdiff3 <- fdiff1 %>% 
+  group_by(fips) %>% 
+  mutate(d_rpcrime = diff(rproperty_crime), lag=1,
+         d_rvcrime = diff(rviolent_crime), lag =1,
+         d_rrefugees = diff(rrefugees), lag =1,
+         d_lpcrime = diff(lproperty_crime), lag=1,
+         d_lvcrime = diff(lviolent_crime), lag=1,
+         d_lrefugees = diff(lrefugees), lag=1,
+         d_s_movers = diff(s_movers), lag=1,
+         d_l_movers = diff(l_movers), lag =1,
+         d_s_clr_property = diff(s_clr_property), lag=1,
+         d_s_clr_violent = diff(s_clr_violent), lag=1,
+         d_trt_r = diff(trt_r), lag=1,
+         d_trt_l = diff(trt_l), lag=1) 
+
+
+m2 <- feols(d_rpcrime ~ d_trt_r, fdiff3)
+summary(m2)
+
+##first difference pool data in 2016 and 2017 by mean of obs
+
+fdiff4 <- fdiff_dta %>% 
+  group_by(fyear, fips) %>% 
+  summarize(lproperty_crime = mean(lproperty_crime),
+            rproperty_crime = mean(rproperty_crime),
+            rviolent_crime = mean(rviolent_crime),
+            lviolent_crime = mean(lviolent_crime),
+            rrefugees = mean(rrefugees),
+            lrefugees = mean(lrefugees),
+            pop_total = mean(pop_total),
+            pop_density = mean(pop_density),
+            s_black = mean(s_black),
+            s_hisp = mean(s_hisp), 
+            s_hs_dropout = mean(s_hs_dropout),
+            s_unempl = mean(s_unempl),
+            s_not_in_lf = mean(s_not_in_lf),
+            s_white = mean(s_white),
+            s_police_male = mean(s_police_male),
+            s_movers = mean(s_movers),
+            s_hs_grad = mean(s_hs_grad),
+            s_male_age_15_34 = mean(s_male_age_15_34),
+            l_movers = mean(l_movers),
+            s_clr_property = mean(s_clr_property),
+            s_clr_violent = mean(s_clr_violent))
+
+trt_dta <- fdiff4 %>% 
+  filter(fyear %in% "2016") %>% 
+  summarize(medianr = median(rrefugees),
+            medianl =  median(lrefugees)) %>% 
+  View()
+
+
+fdiff4$trt_r <- ifelse(fdiff4$rrefugees >= "0.001281953" & fdiff4$fyear == "2017", 1, 0 )
+
+fdiff4$trt_l  <- ifelse(fdiff4$lrefugees >= "0.804719" & fdiff4$fyear == "2017", 1, 0)
+
+
+
+rpcrime <- feols(rproperty_crime ~ trt_r | fips + fyear, cluster = "fips", fdiff4) 
+summary(m3)
+
+
+#first difference pool data in 2016 and 2017 by summing obs
+
+fdiff1 <- fdiff %>% 
+  group_by(fyear, fips) %>% 
+  summarize(lproperty_crime = sum(lproperty_crime),
+            rproperty_crime = sum(rproperty_crime),
+            rviolent_crime = sum(rviolent_crime),
+            lviolent_crime = sum(lviolent_crime),
+            rrefugees = sum(rrefugees),
+            lrefugees = sum(lrefugees),
+            pop_total = sum(pop_total),
+            pop_density = sum(pop_density),
+            s_black = sum(s_black),
+            s_hisp = sum(s_hisp), 
+            s_hs_dropout = sum(s_hs_dropout),
+            s_unempl = sum(s_unempl),
+            s_not_in_lf = sum(s_not_in_lf),
+            s_white = sum(s_white),
+            s_police_male = sum(s_police_male),
+            s_movers = sum(s_movers),
+            s_hs_grad = sum(s_hs_grad),
+            s_male_age_15_34 = sum(s_male_age_15_34),
+            l_movers = sum(l_movers),
+            s_clr_property = sum(s_clr_property),
+            s_clr_violent = sum(s_clr_violent))
+
+trt_dta <- fdiff1 %>% 
+  filter(fyear %in% "2016") %>% 
+  summarize(medianr = median(rrefugees),
+            medianl =  median(lrefugees)) %>% 
+  View()
+
+fdiff1$trt_r <- ifelse(fdiff1$rrefugees >= "0.002563905" & fdiff1$fyear == "2017", 1, 0 )
+
+fdiff1$trt_l  <- ifelse(fdiff1$lrefugees >= "1.609438" & fdiff1$fyear == "2017", 1, 0)
+
+m1 <- feols(rproperty_crime ~ trt_r | fips + fyear, cluster = "fips", fdiff1) 
+summary(m1)
+
+
+#not sure how this works tho
+
+df1 <- fdiff %>% 
+  select(c(year, fyear, fips, rproperty_crime, rproperty_crime)) %>% 
+  group_by(fyear) %>% 
+  mutate(diff = diff(rproperty_crime), lag=2) %>% 
+  View()
+```
+
+Trying synthetic controls
+
+```{r}
+library(tidysynth)
+
+crime <- crime %>%  
+  select(state = "state", fips = "fips", year = "year", property_crime = "property_crime", violent_crime = "violent_crime",
+         cleared_property_crime = "cleared_property_crime", cleared_violent_crime = "cleared_violent_crime")
+
+ref_crime <- left_join(refugees, crime)
+
+dta <- left_join(ref_crime, demographics) 
+
+#transformation outcome var for analysis - log and per capita
+
+dta$lproperty_crime <- log(dta$property_crime + 1)
+
+dta$rproperty_crime <- (dta$property_crime / dta$pop_total) * 100000
+
+dta$lviolent_crime <- log(dta$violent_crime + 1)
+
+dta$rviolent_crime <- (dta$violent_crime / dta$pop_total) * 100000
+
+# treatment variables for the year 2016
+  #getting the per capita and log values for refugees
+dta$rrefugees <- (dta$refugees / dta$pop_total) * 100
+dta$lrefugees <- log(dta$refugees + 1)
+
+#other vars that i dont know where they go/what they do
+
+dta$s_movers <- (dta$pop_moved_in_1_yr_ago / dta$pop_total) * 100000
+
+dta$l_movers <- log(dta$pop_moved_in_1_yr_ago + 1)
+
+dta$s_clr_property <- dta$cleared_property_crime / dta$property_crime
+
+dta$s_clr_violent <- dta$cleared_violent_crime / dta$violent_crime
+
+#might need to change this to just log in 2016
+dta$log_pop_total <- log(dta$pop_total)
+
+dta$log_pop_density <- log(dta$pop_density)
+
+refugees_out <-
+  fdiff_dta %>%
+  synthetic_control(outcome = rproperty_crime, 
+                    unit = county, 
+                    time = year, 
+                    i_unit = county, 
+                    i_time = 2017, 
+                    generate_placebos=T 
+  ) %>%
+
+  generate_predictor(time_window = 2010:2017,
+                     povrate_1 = mean(povrate, na.rm=T),
+                     unemployment_1 = mean(unemployment, na.rm = T),
+                     healthspendpc_1 = mean(healthspendpc, na.rm = T)) %>%
+
+  generate_predictor(time_window = 2000,
+                     no_health_ins_capita_2000 = no_health_ins_capita) %>%
+  generate_predictor(time_window = 2002,
+                     no_health_ins_capita_2002 = no_health_ins_capita) %>%
+  generate_predictor(time_window = 2005,
+                     no_health_ins_capita_2005 = no_health_ins_capita) %>%
+
+  generate_weights(optimization_window = 2000:2011, 
+                   margin_ipop = .02,sigf_ipop = 7,bound_ipop = 6 
+  ) %>%
+  
+  generate_control()
+
+health_out %>% plot_trends()
+health_out %>% plot_differences()
+health_out %>% plot_weights()
+health_out %>% plot_placebos()
+
+```
+
+Continuous DiD
+```{r}
+##continuous did - just years 2016 to 2017 in the model
+
+cdid1 <- cdid %>% 
+  filter(year %in% c("2016", "2017"))
+
+#regular
+cdidr_pcrime3 <- feols(rproperty_crime ~ treatedr | fips 
+                      + year, cluster = "state", cdid1)
+summary(cdidr_pcrime3)
+
+cdidr_pcrime3c <- feols(rproperty_crime ~ treatedr  + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid1)
+summary(cdidr_pcrime3c)
+
+
+cdidr_vcrime3 <- feols(rviolent_crime ~ treatedr | fips 
+                      + year, cluster = "state", cdid1)
+summary(cdidr_vcrime3)
+
+cdidr_vcrime3c <- feols(rviolent_crime ~ treatedr + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid1)
+summary(cdidr_vcrime3c)
+
+#log
+cdidl_pcrime3 <- feols(lproperty_crime ~ treatedl | fips 
+                      + year, cluster = "state", cdid1)
+summary(cdidl_pcrime3)
+
+cdidl_pcrime3c <- feols(lproperty_crime ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid1)
+summary(cdidl_pcrime3c)
+
+cdidl_vcrime3 <- feols(lviolent_crime ~ treatedl | fips 
+                      + year, cluster = "state", cdid1)
+summary(cdidl_vcrime3)
+
+cdidl_vcrime3c <- feols(lviolent_crime ~ treatedl + pop_total 
+                       + s_white + s_black + s_hisp + s_unempl
+                       + s_not_in_lf + s_male_age_15_34 + s_hs_grad + s_hs_dropout | fips 
+                      + year, cluster = "state", cdid1)
+summary(cdidl_vcrime3c)
+
+```
+
+event study plot
+```{r}
+cdid <- cdid %>% 
+  mutate(t = case_when(
+    year == "2010" ~ 1,
+    year == "2011" ~ 2,
+    year == "2012" ~ 3,
+    year == "2013" ~ 4,
+    year == "2014" ~ 5, 
+    year == "2015" ~ 6,
+    year == "2016" ~ 7,
+    year == "2017" ~ 8,
+    year == "2018" ~ 9
+  ))
+
+coefplot(m, drop = '(Intercept)',
+         pt.join = TRUE, ref = c('t:7' = 8), ref.line = TRUE)
+
+m <- feols(rproperty_crime ~ i(year, ref = 2016), data = cdid,
+           cluster = 'fips')
+
+#create fake treatment vars - this one works i think
+cdid <- cdid %>% 
+  mutate(fakeTreat = ifelse(treatedr %in% "0", 1, 1 ))
+
+m <- feols(rproperty_crime ~ i(year, fakeTreat, ref = 2016) | state, data = cdid)
+
+coefplot(m)
+
+
+```
+
+Another way to do the coefficient plot
+```{r}
+library(dotwhisker)
+dwplot(list(cdidr_pcrime, cdidr_vcrime, cdidl_pcrime, cdidl_vcrime),
+       vline = geom_vline(
+           xintercept = 0,
+           colour = "grey60",
+           linetype = 2
+       ),
+       vars_order = c("treatedr", "treatedl"),
+       model_order = c("Model 1", "Model 2", 
+                       "Model 3", "Model 4")
+       ) %>% # plot line at zero _behind_coefs
+    relabel_predictors(
+        c(  treatedr = "Refugee Arrivals",
+            treatedl = "Log Refugee Arrivals"
+        )
+    ) +
+    theme_bw(base_size = 4) + 
+    # Setting `base_size` for fit the theme
+    # No need to set `base_size` in most usage
+    xlab("Coefficient Estimate") + ylab("") +
+    geom_vline(xintercept = 0,
+               colour = "grey60",
+               linetype = 2) +
+    ggtitle("Continuous Differences Estimates") +
+    theme(
+        plot.title = element_text(face = "bold"),
+        legend.position = c(0.007, 0.01),
+        legend.justification = c(0, 0),
+        legend.background = element_rect(colour = "grey80"),
+        legend.title = element_blank()
+    )
+
+```
+
+coeff plots - dont work
+```{r}
+library(dotwhisker)
+library(broom)
+
+fd_rpcrime <- fd_rpcrime %>% broom::tidy() %>% mutate(model = "First Differences")
+
+map2_df(list(fd_rpcrime, fd_rvcrime, fd_lpcrime, fd_lvcrime), 
+        c("Property Crime", "Violent Crime", "Log Property Crime",
+          "Log Violent Crime"), 
+        function(x, y) broom::tidy(x) %>% mutate(model = y)) %>% 
+  filter(term %in% c("treatedr", "treatedl", "rproperty_crime",
+                     "rviolent_crime", "lproperty_crime", "lviolent_crime")) %>% 
+  dwplot() +
+  theme_minimal()
+
+```
+
+Descriptive statistics
+the map
+```{r}
+library(sf)
+library(rgdal)
+library(maps)
+library(purrr)
+
+city_mapping <- read_dta("~/R/replication_project_pols6200/citymapping.dta")
+
+fips1 <- county.fips
+fips <- map_data("county")
+crime <- read_dta("~/R/replication_project_pols6200/crime.dta")
+
+fips1 <- fips1 %>% 
+  separate(polyname, into = c("region", "county"), sep = ",") 
+
+fips2 <- left_join(fips, fips1)
+
+#change names after
+#dta2 <- left_join(replication, caughey_warshaw, by = c("year", "st.abb" = "stpo"))
+
+
+ggplot(dma.df, aes(x=long, y=lat, group=group, fill=sinclair_total)) + 
+  geom_polygon(color="#666666", size=.5) +
+  scale_fill_gradient(low = "white", high="red")+
+  geom_polygon(data = states_map, aes(x = long, y = lat, group = group), fill=NA, color="black") + # states' borders
+  geom_polygon(data = new.sinclair, 
+               aes(x=long, y=lat, group=group), 
+               fill = "dodgerblue", color="#666666", size=.5) + # newly acquired stations
+  coord_map() +
+  theme_void() +
+  theme(legend.position="none") 
+
+```
+
+# Table A2: Pre-existing Crime Trends and Dropin Refugee Arrivals: Regression Results
+```{r}
+pretrends1 <- pretrends %>% 
+  filter(year %in% c("2010":"2016"))
+
+#creating trt based on if year is 2017 and 2016 value for median - transformed refugee var
+pretrends1 <- pretrends1 %>% 
+  group_by(fips) %>% 
+  arrange(year) %>% 
+  mutate(treatedr = ifelse(year == 2017 & lag(rrefugees) > median(rrefugees), 1, 0)) %>% 
+  mutate(treatedr = ifelse(year == 2018 & lag(rrefugees, 2) > median(rrefugees), 1, treatedr))
+
+pretrends1 <- pretrends1 %>% 
+  group_by(fips) %>% 
+  arrange(year) %>% 
+  mutate(treatedl = ifelse(year == 2017 & lag(lrefugees) > median(lrefugees), 1, 0)) %>% 
+  mutate(treatedl = ifelse(year == 2018 & lag(lrefugees, 2) > median(lrefugees), 1, treatedl))
+
+```
+
+Figure A5 Coefficient plot
+```{r}
+
+
+  #binning refugees into trt and control groups
+trt_dta <- ref_crime %>% 
+  filter(year %in% "2016") %>% 
+  summarize(medianr = median(rrefugees),
+            medianl =  median(lrefugees)) 
+
+ref_crime$trt_r <- ifelse(ref_crime$rrefugees >= "0.001011693" & ref_crime$year == "2016", 1, 0 )
+
+ref_crime$trt_l  <- ifelse(ref_crime$lrefugees >= "1.098612" & ref_crime$year == "2016", 1, 0)
+
+  #creating a year dummy because that's what they did
+ref_crime$year_dummy <- ifelse(ref_crime$year <= "2017", 0, 1)
+
+
+##models with dummy for year interacted with dummy var for refugees
+#regular
+dta <- ref_crime %>% 
+  filter(year >= "2010")
+
+dta %>% 
+  mutate(time_to_trt = case_when(
+    year >= "2017" & trt_r == "1" ~ "1",
+    year >= "2017" & trt_r == "0" ~ "0",
+    year <= "2015" & trt_r == "0" & trt_r == 1 ~ "0",
+    year == "2016" & trt_r == "0" & trt_r == 1 ~ "-1"
+  ))
+
+ref_crime$time_to_trt <- ifelse(ref_crime$year >= "2016" & ref_crime$trt_r == "1", 1, 0)
+
+
+rpcrime1 <- feols(rproperty_crime ~ trt_r + year_dummy + trt_r:year_dummy | fips 
+                      + year, cluster = "state", ref_crime)
+
+library(eventstudies)
+
+ES_plot_ATTs <- (rpcrime1) 
+
+rvcrime1 <- feols(rviolent_crime ~ trt_r + year_dummy + trt_r:year_dummy | fips 
+                      + year, cluster = "state", ref_crime)
+
+#log
+lpcrime1 <- feols(lproperty_crime ~ trt_l + year_dummy + trt_l:year_dummy | fips 
+                      + year, cluster = "state", ref_crime)
+
+lvcrime1 <- feols(lviolent_crime ~ trt_l + year_dummy + trt_l:year_dummy | fips 
+                      + year, cluster = "state", ref_crime)
+```
+
+Panel match - probably what you wanna do to create the coefficient table
+
+```{r}
+
+ref_crime1 <- ref_crime %>% 
+  filter(year >= "2010" & refugees > "0")
+
+ref_crime1 <- ref_crime1 %>% 
+  group_by(fips_county) %>% 
+  arrange(year) %>% 
+  mutate(treatedr = ifelse(year == 2017 & lag(rrefugees) > median(rrefugees), 1, 0)) %>% 
+  mutate(treatedr = ifelse(year == 2018 & lag(rrefugees, 2) > median(rrefugees), 1, treatedr))
+
+ref_crime1 <- ref_crime1 %>% 
+  group_by(fips) %>% 
+  arrange(year) %>% 
+  mutate(treatedl = ifelse(year == 2017 & lag(lrefugees) > median(lrefugees), 1, 0)) %>% 
+  mutate(treatedl = ifelse(year == 2018 & lag(lrefugees, 2) > median(lrefugees), 1, treatedl))
+
+library(panelView)
+
+panelView(rproperty_crime ~ treatedr, data = ref_crime1, index = c("fips","year"))
+
+cdidr_pcrime2 <- feols(rproperty_crime ~ treatedr | fips + year, cluster = "state", ref_crime1)
+summary(pcrime)
+
+
+library(PanelMatch)
+
+dta <- data.frame(fips = as.integer(ref_crime1$fips), year = as.integer(ref_crime1$year),
+                   treatedr = ref_crime1$treatedr,
+                   rproperty_crime = ref_crime1$rproperty_crime, fips_county = as.integer(ref_crime1$fips_county))
+
+DisplayTreatment(unit.id = "fips_county",
+                 time.id = "year", legend.position = "none",
+                 xlab = "Year", ylab = "County",
+                 treatment = "treatedr", data = dta)
+
+#no matching refinement and panel estimate
+PM.results.none <- PanelMatch(lag = 6, time.id = "year", 
+                              unit.id = "fips", 
+                              treatment = "treatedr",
+                              refinement.method = "none",
+                              data = dta, match.missing = TRUE,
+                              size.match = 5, qoi = "att", 
+                              outcome.var = "rproperty_crime",
+                              lead = 0:2, forbid.treatment.reversal = FALSE,
+                              use.diagonal.variance.matrix = TRUE)
+msets.none <- PM.results.none$att
+print(msets.none)
+
+get_covariate_balance(PM.results.none$att,
+                      data = dta3,
+                      use.equal.weights = TRUE,
+                      covariates = c("povrate", "vcrimerate"),
+                      plot = TRUE)
+
+PE.results.none <- PanelEstimate(sets = PM.results.none, data = dta3, 
+                            se.method = "bootstrap", 
+                            number.iterations = 1000,
+                            confidence.level = .95)
+PE.results.none[["estimates"]]
+plot(PE.results.none)
+
+```
