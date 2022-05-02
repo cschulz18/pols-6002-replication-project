@@ -25,10 +25,6 @@ refugees <- read_dta("~/R/replication_project_pols6200/wraps_fips.dta")
 demographics <- read_dta("~/R/replication_project_pols6200/demographics.dta")
 ```
 
-run continous treat on year county fixed effects - w refugee number on crime statistics - naive twfe
-- give quantity that may or may not be similar to what they find
-- this is what they did in the second part of the paper
-
 Continuous DiD Model
 ```{r}
 ### making correct data set for continuous did
@@ -59,7 +55,7 @@ cdid <- cdid %>%
          log_pop_total = log(pop_total),
          log_pop_density <- log(pop_density))
  
-#creating trt based on if year is2017 and 2016 value for median - transformed refugee var
+#creating trt based on if year is 2017 and 2016 value for median - transformed refugee var
 cdid <- cdid %>% 
   group_by(fips) %>% 
   arrange(year) %>% 
@@ -76,7 +72,7 @@ cdid <- cdid %>%
 
 
 ```{r}
-##continous did models - with all years & no dummy interacted for year
+##continous did models - with all years 
   #still need to add county-specific linear time trends allowing
   #for idiosyncratic trends across localities
 
